@@ -1,0 +1,7 @@
+# generated at install time (contains machine-specific paths)
+github.pac
+start-wireproxy.vbs
+
+# OS junk
+Thumbs.db
+Desktop.ini
