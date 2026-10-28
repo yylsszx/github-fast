@@ -90,6 +90,10 @@ function Test-TunnelHealth([int]$p, [int]$TimeoutSec = 8) {
     return ($code -match '^2\d\d$')
 }
 
+# NOTE: do NOT hardcode $PreferredPort here. The listener may live on any
+# candidate socks port (see Find-SocksPort). Kill the *actual* unhealthy
+# instance, otherwise Restart-Wireproxy cannot bind the port and self-heal
+# silently fails. Kept this way permanently.
 function Stop-Wireproxy([int]$p) {
     $port = if ($p -gt 0) { $p } else { $PreferredPort }
     $listener = netstat -ano | Select-String "TCP\s+${SocksHost}:${port}\s.*LISTENING"
@@ -125,6 +129,9 @@ function Ensure-Wireproxy {
     }
 
     # WARP handshakes succeed probabilistically; retry the whole start cycle
+    # Pass the *found* port so Restart-Wireproxy kills the listener that is
+    # actually unhealthy (may not be $PreferredPort). Do not drop the $port
+    # argument, or tunnel self-heal becomes a no-op on non-default ports.
     for ($attempt = 1; $attempt -le 2; $attempt++) {
         $port = Find-SocksPort
         if ($port) {
@@ -317,7 +324,8 @@ function Enable-ShellHook([int]$p) {
     $psDir  = Join-Path ([Environment]::GetFolderPath('MyDocuments')) 'WindowsPowerShell'
     $psProf = Join-Path $psDir 'profile.ps1'
     if (-not (Test-Path $psDir)) { New-Item -ItemType Directory -Path $psDir | Out-Null }
-    # remove any previously installed block first so repeated installs stay idempotent
+    # install must be idempotent: strip any previously installed ghfast block
+    # before appending, otherwise repeated installs pile up duplicate blocks.
     Remove-ShellHookBlock $bashrc
     Remove-ShellHookBlock $psProf
     Add-Content -Path $bashrc -Value ("`n" + $BashHook -replace '__PORT__', "$p") -Encoding ASCII
