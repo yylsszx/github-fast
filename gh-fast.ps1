@@ -90,8 +90,9 @@ function Test-TunnelHealth([int]$p, [int]$TimeoutSec = 8) {
     return ($code -match '^2\d\d$')
 }
 
-function Stop-Wireproxy {
-    $listener = netstat -ano | Select-String "TCP\s+${SocksHost}:${PreferredPort}\s.*LISTENING"
+function Stop-Wireproxy([int]$p) {
+    $port = if ($p -gt 0) { $p } else { $PreferredPort }
+    $listener = netstat -ano | Select-String "TCP\s+${SocksHost}:${port}\s.*LISTENING"
     if ($listener) {
         $procId = ("$listener" -split '\s+')[-1]
         if ($procId -match '^\d+$') {
@@ -101,9 +102,9 @@ function Stop-Wireproxy {
     }
 }
 
-function Restart-Wireproxy {
+function Restart-Wireproxy([int]$p) {
     # WARP tunnels die silently (UDP flows get culled); a restart revives them
-    Stop-Wireproxy
+    Stop-Wireproxy $p
     Start-Wireproxy
 }
 
@@ -125,9 +126,10 @@ function Ensure-Wireproxy {
 
     # WARP handshakes succeed probabilistically; retry the whole start cycle
     for ($attempt = 1; $attempt -le 2; $attempt++) {
-        if (Find-SocksPort) {
+        $port = Find-SocksPort
+        if ($port) {
             Write-Host "[..] attempt ${attempt}: tunnel unhealthy - restarting wireproxy ..."
-            Restart-Wireproxy
+            Restart-Wireproxy $port
         } else {
             Write-Host "[..] attempt ${attempt}: starting wireproxy (WARP) ..."
             Start-Wireproxy
@@ -300,12 +302,25 @@ function ghfast {
 # <<< $ShellMark <<<
 "@
 
+# --------------------------------------------------------------------------
+# shell hook block removal (shared by enable/disable for idempotency)
+# --------------------------------------------------------------------------
+function Remove-ShellHookBlock([string]$path) {
+    if (-not (Test-Path $path)) { return }
+    $text = [System.IO.File]::ReadAllText($path)
+    $new = [regex]::Replace($text, "(?s)\r?\n?# >>> $ShellMark >>>.*?# <<< $ShellMark <<<\r?\n?", "`r`n")
+    if ($new -ne $text) { [System.IO.File]::WriteAllText($path, $new) }
+}
+
 function Enable-ShellHook([int]$p) {
     $bashrc = Join-Path $env:USERPROFILE '.bashrc'
-    Add-Content -Path $bashrc -Value ("`n" + $BashHook -replace '__PORT__', "$p") -Encoding ASCII
     $psDir  = Join-Path ([Environment]::GetFolderPath('MyDocuments')) 'WindowsPowerShell'
     $psProf = Join-Path $psDir 'profile.ps1'
     if (-not (Test-Path $psDir)) { New-Item -ItemType Directory -Path $psDir | Out-Null }
+    # remove any previously installed block first so repeated installs stay idempotent
+    Remove-ShellHookBlock $bashrc
+    Remove-ShellHookBlock $psProf
+    Add-Content -Path $bashrc -Value ("`n" + $BashHook -replace '__PORT__', "$p") -Encoding ASCII
     Add-Content -Path $psProf -Value ("`n" + $PsHook -replace '__PORT__', "$p") -Encoding ASCII
     Write-Host "[OK] ghfast hook  -> .bashrc + PowerShell profile (ghfast on/off)" -ForegroundColor Green
 }
@@ -313,10 +328,7 @@ function Enable-ShellHook([int]$p) {
 function Disable-ShellHook {
     foreach ($f in @((Join-Path $env:USERPROFILE '.bashrc'),
                      (Join-Path ([Environment]::GetFolderPath('MyDocuments')) 'WindowsPowerShell\profile.ps1'))) {
-        if (-not (Test-Path $f)) { continue }
-        $text = [System.IO.File]::ReadAllText($f)
-        $new = [regex]::Replace($text, "(?s)\r?\n?# >>> $ShellMark >>>.*?# <<< $ShellMark <<<\r?\n?", "`r`n")
-        if ($new -ne $text) { [System.IO.File]::WriteAllText($f, $new) }
+        Remove-ShellHookBlock $f
     }
     Write-Host "[OK] ghfast hook  -> removed from shells" -ForegroundColor Yellow
 }
